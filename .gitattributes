@@ -1,0 +1,17 @@
+# Normalize line endings: Go source is always LF in the repository.
+*.go text eol=lf
+*.md text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Windows binaries and media are never normalized.
+*.exe binary
+*.dll binary
+*.png binary
+*.jpg binary
+*.db binary

@@ -1,0 +1,46 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+gobot
+gobot-*
+
+# Testing
+bot testing/
+bot testing.zip
+
+
+# Environment
+.env
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Database & data
+data/
+*.db
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Temporary files
+*.zip
+*.tmp
+*.rar
+*.7z
+
+# Logs
+logs.txt
+logs.old.txt
+*.log
+
+# External binaries (user-provided)
+external/
+
+# AI Generated Tests
+*ai_test.go
