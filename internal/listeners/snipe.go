@@ -389,4 +389,402 @@ func (s *SnipeCache) GetLimit(guildID string) int {
 
 	limit := 25
 	if DB != nil {
-		if dbLim, err := DB.GetGuildSettingInt(guildID, database.Setting
+		if dbLim, err := DB.GetGuildSettingInt(guildID, database.SettingSnipeLimit); err == nil && dbLim > 0 {
+			limit = dbLim
+		}
+	}
+	if limit > s.maxLimit() {
+		limit = s.maxLimit()
+	}
+
+	s.guildLimitsMu.Lock()
+	s.guildLimits[guildID] = limit
+	s.guildLimitsMu.Unlock()
+
+	return limit
+}
+
+func (s *SnipeCache) AddDeleted(guildID, channelID string, entry SnipeEntry) {
+	if channelID == "" {
+		return
+	}
+	limit := s.GetLimit(guildID)
+	shard := s.getShard(channelID)
+
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+
+	shard.lastActive[channelID] = time.Now()
+	list := append(shard.deleted[channelID], entry)
+	if len(list) > limit {
+		evictCount := len(list) - limit
+		for i := 0; i < evictCount; i++ {
+			list[i] = SnipeEntry{}
+		}
+		list = list[evictCount:]
+	}
+	shard.deleted[channelID] = list
+}
+
+func (s *SnipeCache) AddDeletedBatch(guildID, channelID string, entries []SnipeEntry) {
+	if channelID == "" || len(entries) == 0 {
+		return
+	}
+	limit := s.GetLimit(guildID)
+	shard := s.getShard(channelID)
+
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+
+	shard.lastActive[channelID] = time.Now()
+	list := append(shard.deleted[channelID], entries...)
+	if len(list) > limit {
+		evictCount := len(list) - limit
+		for i := 0; i < evictCount; i++ {
+			list[i] = SnipeEntry{}
+		}
+		list = list[evictCount:]
+	}
+	shard.deleted[channelID] = list
+}
+
+func (s *SnipeCache) GetDeleted(channelID string, index int) (SnipeEntry, int, bool) {
+	if channelID == "" {
+		return SnipeEntry{}, 0, false
+	}
+
+	shard := s.getShard(channelID)
+	shard.mu.RLock()
+	defer shard.mu.RUnlock()
+
+	list := shard.deleted[channelID]
+	total := len(list)
+	if total == 0 || index < 1 || index > total {
+		return SnipeEntry{}, total, false
+	}
+
+	return list[total-index], total, true
+}
+
+func (s *SnipeCache) AddEdited(guildID, channelID string, entry SnipeEntry) {
+	if channelID == "" {
+		return
+	}
+	limit := s.GetLimit(guildID)
+	shard := s.getShard(channelID)
+
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+
+	shard.lastActive[channelID] = time.Now()
+	list := append(shard.edited[channelID], entry)
+	if len(list) > limit {
+		evictCount := len(list) - limit
+		for i := 0; i < evictCount; i++ {
+			list[i] = SnipeEntry{}
+		}
+		list = list[evictCount:]
+	}
+	shard.edited[channelID] = list
+}
+
+func (s *SnipeCache) GetEdited(channelID string, index int) (SnipeEntry, int, bool) {
+	if channelID == "" {
+		return SnipeEntry{}, 0, false
+	}
+
+	shard := s.getShard(channelID)
+	shard.mu.RLock()
+	defer shard.mu.RUnlock()
+
+	list := shard.edited[channelID]
+	total := len(list)
+	if total == 0 || index < 1 || index > total {
+		return SnipeEntry{}, total, false
+	}
+
+	return list[total-index], total, true
+}
+
+func (s *SnipeCache) AddReaction(guildID, channelID string, entry ReactionEntry) {
+	if channelID == "" {
+		return
+	}
+	limit := s.GetLimit(guildID)
+	shard := s.getShard(channelID)
+
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+
+	shard.lastActive[channelID] = time.Now()
+	list := append(shard.reactions[channelID], entry)
+	if len(list) > limit {
+		evictCount := len(list) - limit
+		for i := 0; i < evictCount; i++ {
+			list[i] = ReactionEntry{}
+		}
+		list = list[evictCount:]
+	}
+	shard.reactions[channelID] = list
+}
+
+func (s *SnipeCache) GetReaction(channelID string, index int) (ReactionEntry, int, bool) {
+	if channelID == "" {
+		return ReactionEntry{}, 0, false
+	}
+
+	shard := s.getShard(channelID)
+	shard.mu.RLock()
+	defer shard.mu.RUnlock()
+
+	list := shard.reactions[channelID]
+	total := len(list)
+	if total == 0 || index < 1 || index > total {
+		return ReactionEntry{}, total, false
+	}
+
+	return list[total-index], total, true
+}
+
+func (s *SnipeCache) Clear(channelID string) {
+	if channelID == "" {
+		return
+	}
+
+	shard := s.getShard(channelID)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+
+	delete(shard.recentMsgs, channelID)
+	delete(shard.deleted, channelID)
+	delete(shard.edited, channelID)
+	delete(shard.reactions, channelID)
+	delete(shard.lastActive, channelID)
+}
+
+func OnMessageReactionRemove(s *discordgo.Session, r *discordgo.MessageReactionRemove) {
+	if r == nil || r.UserID == "" {
+		return
+	}
+
+	if s != nil && s.State != nil && s.State.User != nil && r.UserID == s.State.User.ID {
+		return
+	}
+
+	var username string
+	var avatarURL string
+	if member, err := helpers.GetGuildMember(s, r.GuildID, r.UserID); err == nil && member != nil && member.User != nil {
+		username = member.User.Username
+		avatarURL = safeMemberAvatarURL(member, member.User, r.GuildID)
+	} else if user, errU := s.User(r.UserID); errU == nil && user != nil {
+		username = user.Username
+		avatarURL = helpers.UserAvatar(user)
+	} else {
+		username = "User"
+	}
+
+	emojiURL := ""
+	if r.Emoji.ID != "" {
+		ext := "png"
+		if r.Emoji.Animated {
+			ext = "gif"
+		}
+		emojiURL = fmt.Sprintf("https://cdn.discordapp.com/emojis/%s.%s", r.Emoji.ID, ext)
+	}
+
+	entry := ReactionEntry{
+		AuthorName:   username,
+		AuthorAvatar: avatarURL,
+		AuthorID:     r.UserID,
+		EmojiName:    r.Emoji.Name,
+		EmojiURL:     emojiURL,
+		MessageID:    r.MessageID,
+		ChannelID:    r.ChannelID,
+		Timestamp:    time.Now(),
+	}
+
+	GlobalSnipeCache.AddReaction(r.GuildID, r.ChannelID, entry)
+}
+
+func OnMessageCreateForSnipe(s *discordgo.Session, m *discordgo.MessageCreate) {
+	if m != nil && m.Message != nil {
+		GlobalSnipeCache.TrackMessage(m.Message)
+	}
+}
+
+func OnMessageDelete(s *discordgo.Session, m *discordgo.MessageDelete) {
+	if m == nil || m.ID == "" {
+		return
+	}
+
+	var authorID, authorName, authorAvatar string
+	var isBot bool
+	var content string
+	var attachments []string
+	var authorUser *discordgo.User
+
+	if m.BeforeDelete != nil && m.BeforeDelete.Author != nil {
+		authorUser = m.BeforeDelete.Author
+		authorID = m.BeforeDelete.Author.ID
+		authorName = m.BeforeDelete.Author.Username
+		authorAvatar = safeMemberAvatarURL(m.BeforeDelete.Member, m.BeforeDelete.Author, m.GuildID)
+		isBot = m.BeforeDelete.Author.Bot
+		content = m.BeforeDelete.Content
+		for _, att := range m.BeforeDelete.Attachments {
+			if att.URL != "" {
+				attachments = append(attachments, att.URL)
+			}
+		}
+	} else if tracked, ok := GlobalSnipeCache.GetTrackedMessage(m.ChannelID, m.ID); ok {
+		authorID = tracked.AuthorID
+		authorName = tracked.AuthorName
+		authorAvatar = tracked.AuthorAvatar
+		isBot = tracked.IsBot
+		content = tracked.Content
+		attachments = tracked.Attachments
+	}
+
+	GlobalSnipeCache.RemoveTrackedMessage(m.ChannelID, m.ID)
+
+	if authorID == "" || isBot || (content == "" && len(attachments) == 0) {
+		return
+	}
+
+	entry := SnipeEntry{
+		AuthorName:     authorName,
+		AuthorAvatar:   authorAvatar,
+		AuthorID:       authorID,
+		Content:        content,
+		AttachmentURLs: attachments,
+		Timestamp:      time.Now(),
+	}
+
+	if IsAutoModDeleted(m.ID) {
+		return
+	}
+
+	GlobalSnipeCache.AddDeleted(m.GuildID, m.ChannelID, entry)
+
+	if DB != nil && m.GuildID != "" {
+		createdTS, _ := discordgo.SnowflakeTimestamp(m.ID)
+		if authorUser == nil {
+			authorUser = &discordgo.User{
+				ID:       authorID,
+				Username: authorName,
+			}
+		}
+		modlog.Log(s, DB, &modlog.MessageDeleteEvent{
+			GuildID:      m.GuildID,
+			Author:       authorUser,
+			AuthorAvatar: authorAvatar,
+			ChannelID:    m.ChannelID,
+			MessageID:    m.ID,
+			Content:      content,
+			Attachments:  attachments,
+			SentAt:       createdTS,
+		})
+	}
+}
+
+func OnMessageDeleteBulk(s *discordgo.Session, m *discordgo.MessageDeleteBulk) {
+	if m == nil || m.GuildID == "" || len(m.Messages) == 0 {
+		return
+	}
+
+	msgIDs := make([]string, len(m.Messages))
+	copy(msgIDs, m.Messages)
+	sort.Slice(msgIDs, func(i, j int) bool {
+		tsI, errI := discordgo.SnowflakeTimestamp(msgIDs[i])
+		tsJ, errJ := discordgo.SnowflakeTimestamp(msgIDs[j])
+		if errI == nil && errJ == nil {
+			return tsI.Before(tsJ)
+		}
+		return msgIDs[i] < msgIDs[j]
+	})
+
+	var entries []SnipeEntry
+	for _, msgID := range msgIDs {
+		if IsAutoModDeleted(msgID) {
+			continue
+		}
+		tracked, ok := GlobalSnipeCache.GetTrackedMessage(m.ChannelID, msgID)
+		if !ok || tracked.IsBot || (tracked.Content == "" && len(tracked.Attachments) == 0) {
+			continue
+		}
+
+		entries = append(entries, SnipeEntry{
+			AuthorName:     tracked.AuthorName,
+			AuthorAvatar:   tracked.AuthorAvatar,
+			AuthorID:       tracked.AuthorID,
+			Content:        tracked.Content,
+			AttachmentURLs: tracked.Attachments,
+			Timestamp:      time.Now(),
+		})
+	}
+
+	GlobalSnipeCache.RemoveTrackedMessages(m.ChannelID, msgIDs)
+
+	if len(entries) > 0 {
+		GlobalSnipeCache.AddDeletedBatch(m.GuildID, m.ChannelID, entries)
+	}
+
+	if DB != nil && len(entries) > 0 {
+		mod, _ := fetchRecentAuditLog(s, m.GuildID, int(discordgo.AuditLogActionMessageBulkDelete), m.ChannelID)
+		details := fmt.Sprintf("Bulk deleted %d message(s) in <#%s>", len(m.Messages), m.ChannelID)
+		modlog.Log(s, DB, &modlog.ChannelEvent{
+			GuildID:   m.GuildID,
+			Action:    "Bulk Message Delete",
+			ChannelID: m.ChannelID,
+			Moderator: mod,
+			Reason:    details,
+		})
+	}
+}
+
+func OnMessageUpdate(s *discordgo.Session, m *discordgo.MessageUpdate) {
+	if m == nil || m.ID == "" {
+		return
+	}
+
+	var authorID, authorName, authorAvatar string
+	var isBot bool
+	var oldContent string
+	var authorUser *discordgo.User
+
+	if m.BeforeUpdate != nil && m.BeforeUpdate.Author != nil {
+		authorUser = m.BeforeUpdate.Author
+		authorID = m.BeforeUpdate.Author.ID
+		authorName = m.BeforeUpdate.Author.Username
+		authorAvatar = safeMemberAvatarURL(m.BeforeUpdate.Member, m.BeforeUpdate.Author, m.GuildID)
+		isBot = m.BeforeUpdate.Author.Bot
+		oldContent = m.BeforeUpdate.Content
+	} else if tracked, ok := GlobalSnipeCache.GetTrackedMessage(m.ChannelID, m.ID); ok {
+		authorID = tracked.AuthorID
+		authorName = tracked.AuthorName
+		authorAvatar = tracked.AuthorAvatar
+		isBot = tracked.IsBot
+		oldContent = tracked.Content
+	}
+
+	if authorID == "" && s != nil {
+		if msg, err := s.ChannelMessage(m.ChannelID, m.ID); err == nil && msg != nil && msg.Author != nil {
+			authorUser = msg.Author
+			authorID = msg.Author.ID
+			authorName = msg.Author.Username
+			authorAvatar = safeMemberAvatarURL(msg.Member, msg.Author, m.GuildID)
+			isBot = msg.Author.Bot
+		}
+	}
+
+	var attachments []string
+	for _, att := range m.Attachments {
+		if att.URL != "" {
+			attachments = append(attachments, att.URL)
+		}
+	}
+
+	if m.Content != "" || len(attachments) > 0 {
+		GlobalSnipeCache.UpdateTracked(m.ChannelID, m.ID, m.Content, attachments)
+	}
+
+	if authorID == "" || isBot || oldContent == m.Content || (oldContent == "" &&
