@@ -4,7 +4,7 @@ go 1.23
 
 require (
 	github.com/bwmarrin/discordgo v0.29.1-0.20260214123928-f43dd94faaac
-	github.com/disgoorg/godave v0.3.0
+	github.com/disgoorg/godave v0.5.1
 	github.com/fogleman/gg v1.3.0
 	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0
 	github.com/gorilla/websocket v1.5.3
