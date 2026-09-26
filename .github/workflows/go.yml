@@ -21,6 +21,8 @@ jobs:
       with:
         go-version-file: 'go.mod'
 
+    - name: Tidy Go Modules
+      run: go mod tidy
 
     - name: Build
       run: go build -v ./...
